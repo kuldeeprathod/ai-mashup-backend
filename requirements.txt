@@ -4,7 +4,7 @@ python-multipart
 pydub
 audioop-lts
 groq
+numpy
 demucs
 torch
 torchaudio
-numpy
