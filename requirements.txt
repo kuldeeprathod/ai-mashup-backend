@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 python-multipart
 pydub
+audioop-lts
 groq
 demucs
 torch
