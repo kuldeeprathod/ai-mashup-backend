@@ -23,12 +23,12 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 def get_client():
-    key = os.environ.get("GROQ_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY")
 
-    if not key:
+    if not api_key:
         raise Exception("GROQ_API_KEY is not configured.")
 
-    return Groq(api_key=key)
+    return Groq(api_key=api_key)
 
 
 def clean_text(text):
@@ -105,9 +105,9 @@ def build_natural_lines(segments):
             current["end"] = end
 
             current["text"] = (
-                current["text"] +
-                " " +
-                text
+                current["text"]
+                + " "
+                + text
             ).strip()
 
         else:
@@ -237,13 +237,14 @@ Priorities:
 4. Prefer approximately 5-15 seconds.
 5. If a complete natural line is longer than 15 seconds,
    do not reject it only because it is longer.
-6. Avoid filler vocals such as oh, yeah, aah, na.
-7. Avoid incomplete phrases when a complete line exists.
-8. Prefer lyrics that can transition naturally into another song.
+6. Avoid filler vocals.
+7. Avoid incomplete phrases.
+8. Prefer a strong standalone lyric.
 
-Return ONLY valid JSON:
+Return ONLY valid JSON.
 
-{{"id": NUMBER}}
+Example:
+{{"id": 12}}
 
 Candidates:
 {candidate_text}
@@ -326,7 +327,7 @@ def home():
     return {
         "status": "online",
         "service": "AI Mashup Maker",
-        "version": "7.1"
+        "version": "7.2"
     }
 
 
@@ -476,15 +477,19 @@ async def create_mashup(
 
                 selected_lines.append({
                     "song":
-                        upload.filename,
+                    upload.filename,
+
                     "text":
-                        best["text"],
+                    best["text"],
+
                     "start":
-                        best["start"],
+                    best["start"],
+
                     "end":
-                        best["end"],
+                    best["end"],
+
                     "duration":
-                        best["duration"]
+                    best["duration"]
                 })
 
             else:
@@ -500,21 +505,25 @@ async def create_mashup(
 
                 selected_lines.append({
                     "song":
-                        upload.filename,
+                    upload.filename,
+
                     "text":
-                        "",
+                    "",
+
                     "start":
-                        0,
+                    0,
+
                     "end":
-                        round(
-                            clip_length / 1000,
-                            2
-                        ),
+                    round(
+                        clip_length / 1000,
+                        2
+                    ),
+
                     "duration":
-                        round(
-                            clip_length / 1000,
-                            2
-                        )
+                    round(
+                        clip_length / 1000,
+                        2
+                    )
                 })
 
             clips.append(clip)
@@ -545,24 +554,29 @@ async def create_mashup(
 
         return {
             "status":
-                "success",
+            "success",
+
             "job_id":
-                job_id,
+            job_id,
+
             "message":
-                "AI Mashup created successfully.",
+            "AI Mashup created successfully.",
+
             "selected_lines":
-                selected_lines,
+            selected_lines,
+
             "download_url":
-                f"/download/{job_id}"
+            f"/download/{job_id}"
         }
 
     except Exception as e:
 
         return {
             "status":
-                "error",
+            "error",
+
             "message":
-                str(e)
+            str(e)
         }
 
 
@@ -582,9 +596,10 @@ def download_mashup(
 
         return {
             "status":
-                "error",
+            "error",
+
             "message":
-                "Mashup file not found."
+            "Mashup file not found."
         }
 
     return FileResponse(
