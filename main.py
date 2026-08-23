@@ -21,6 +21,12 @@ app.add_middleware(
 OUTPUT_DIR = "/tmp/mashup_outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# IMPORTANT:
+# First character is lowercase "l"
+AI_MODEL = "llama-3.3-70b-versatile"
+
+WHISPER_MODEL = "whisper-large-v3-turbo"
+
 
 def get_client():
     api_key = os.environ.get("GROQ_API_KEY")
@@ -41,7 +47,7 @@ def transcribe_audio(client, file_path):
 
         transcription = client.audio.transcriptions.create(
             file=audio_file,
-            model="whisper-large-v3-turbo",
+            model=WHISPER_MODEL,
             language="hi",
             response_format="verbose_json",
             timestamp_granularities=["segment"]
@@ -52,10 +58,13 @@ def transcribe_audio(client, file_path):
     for segment in transcription.segments:
 
         if isinstance(segment, dict):
+
             start = segment["start"]
             end = segment["end"]
             text = segment.get("text", "")
+
         else:
+
             start = segment.start
             end = segment.end
             text = segment.text
@@ -63,6 +72,7 @@ def transcribe_audio(client, file_path):
         text = clean_text(text)
 
         if text:
+
             segments.append({
                 "start": float(start),
                 "end": float(end),
@@ -138,21 +148,27 @@ def local_score(line):
     score = 0
 
     if 5 <= duration <= 15:
+
         score += 40
 
     elif 15 < duration <= 22:
+
         score += 30
 
     elif duration > 22:
+
         score += 10
 
     else:
+
         score += 5
 
     if 6 <= len(words) <= 25:
+
         score += 30
 
     elif len(words) >= 4:
+
         score += 15
 
     filler = [
@@ -171,6 +187,7 @@ def local_score(line):
     for word in words:
 
         if word.lower() in filler:
+
             score -= 10
 
     return score
@@ -195,23 +212,36 @@ def rank_lines_with_ai(client, lines):
         if duration >= 3 and score >= 10:
 
             candidates.append({
+
                 "index": index,
-                "start": line["start"],
-                "end": line["end"],
-                "duration": round(
-                    duration,
-                    2
-                ),
-                "text": line["text"],
-                "local_score": score
+
+                "start":
+                    line["start"],
+
+                "end":
+                    line["end"],
+
+                "duration":
+                    round(
+                        duration,
+                        2
+                    ),
+
+                "text":
+                    line["text"],
+
+                "local_score":
+                    score
             })
 
     if not candidates:
+
         return None
 
     candidates = sorted(
         candidates,
-        key=lambda x: x["local_score"],
+        key=lambda x:
+            x["local_score"],
         reverse=True
     )[:30]
 
@@ -228,15 +258,17 @@ def rank_lines_with_ai(client, lines):
     prompt = f"""
 You are an expert Hindi music mashup editor.
 
-Choose ONE candidate line that will work best inside a Hindi song mashup.
+Choose ONE candidate line that will work best
+inside a Hindi song mashup.
 
 Priorities:
+
 1. Meaningful and memorable lyric.
 2. Strong emotional or catchy hook.
 3. Sounds natural when isolated.
 4. Prefer approximately 5-15 seconds.
-5. If a complete natural line is longer than 15 seconds,
-   do not reject it only because it is longer.
+5. A complete natural line longer than 15 seconds
+   can still be selected.
 6. Avoid filler vocals.
 7. Avoid incomplete phrases.
 8. Prefer a strong standalone lyric.
@@ -251,13 +283,23 @@ Candidates:
 """
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+
+        # IMPORTANT:
+        # lowercase l in llama
+        model=AI_MODEL,
+
         temperature=0,
+
         messages=[
+
             {
-                "role": "user",
-                "content": prompt
+                "role":
+                    "user",
+
+                "content":
+                    prompt
             }
+
         ]
     )
 
@@ -275,6 +317,7 @@ Candidates:
     )
 
     if not match:
+
         return candidates[0]
 
     try:
@@ -290,15 +333,20 @@ Candidates:
         for item in candidates:
 
             if item["index"] == selected_id:
+
                 return item
 
     except Exception:
+
         pass
 
     return candidates[0]
 
 
-def analyze_file(client, file_path):
+def analyze_file(
+    client,
+    file_path
+):
 
     segments = transcribe_audio(
         client,
@@ -315,9 +363,15 @@ def analyze_file(client, file_path):
     )
 
     return {
-        "segments": segments,
-        "lines": natural_lines,
-        "best_line": best
+
+        "segments":
+            segments,
+
+        "lines":
+            natural_lines,
+
+        "best_line":
+            best
     }
 
 
@@ -325,9 +379,21 @@ def analyze_file(client, file_path):
 def home():
 
     return {
-        "status": "online",
-        "service": "AI Mashup Maker",
-        "version": "7.2"
+
+        "status":
+            "online",
+
+        "service":
+            "AI Mashup Maker",
+
+        "version":
+            "8.0",
+
+        "ai_model":
+            AI_MODEL,
+
+        "whisper_model":
+            WHISPER_MODEL
     }
 
 
@@ -353,9 +419,12 @@ async def analyze_song(
         if len(data) > 25 * 1024 * 1024:
 
             return {
-                "status": "error",
+
+                "status":
+                    "error",
+
                 "message":
-                "Audio file is larger than 25 MB."
+                    "Audio file is larger than 25 MB."
             }
 
         with open(
@@ -373,18 +442,32 @@ async def analyze_song(
         )
 
         return {
-            "status": "success",
-            "filename": file.filename,
-            "segments": result["segments"],
-            "lines": result["lines"],
-            "best_line": result["best_line"]
+
+            "status":
+                "success",
+
+            "filename":
+                file.filename,
+
+            "segments":
+                result["segments"],
+
+            "lines":
+                result["lines"],
+
+            "best_line":
+                result["best_line"]
         }
 
     except Exception as e:
 
         return {
-            "status": "error",
-            "message": str(e)
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
         }
 
     finally:
@@ -406,14 +489,18 @@ async def create_mashup(
     if len(files) < 2:
 
         return {
-            "status": "error",
+
+            "status":
+                "error",
+
             "message":
-            "Please upload at least 2 songs."
+                "Please upload at least 2 songs."
         }
 
     job_id = str(uuid.uuid4())
 
     clips = []
+
     selected_lines = []
 
     try:
@@ -437,10 +524,13 @@ async def create_mashup(
             if len(data) > 25 * 1024 * 1024:
 
                 return {
-                    "status": "error",
+
+                    "status":
+                        "error",
+
                     "message":
-                    f"{upload.filename} "
-                    "is larger than 25 MB."
+                        f"{upload.filename} "
+                        "is larger than 25 MB."
                 }
 
             with open(
@@ -476,20 +566,21 @@ async def create_mashup(
                 ]
 
                 selected_lines.append({
+
                     "song":
-                    upload.filename,
+                        upload.filename,
 
                     "text":
-                    best["text"],
+                        best["text"],
 
                     "start":
-                    best["start"],
+                        best["start"],
 
                     "end":
-                    best["end"],
+                        best["end"],
 
                     "duration":
-                    best["duration"]
+                        best["duration"]
                 })
 
             else:
@@ -504,29 +595,32 @@ async def create_mashup(
                 ]
 
                 selected_lines.append({
+
                     "song":
-                    upload.filename,
+                        upload.filename,
 
                     "text":
-                    "",
+                        "",
 
                     "start":
-                    0,
+                        0,
 
                     "end":
-                    round(
-                        clip_length / 1000,
-                        2
-                    ),
+                        round(
+                            clip_length / 1000,
+                            2
+                        ),
 
                     "duration":
-                    round(
-                        clip_length / 1000,
-                        2
-                    )
+                        round(
+                            clip_length / 1000,
+                            2
+                        )
                 })
 
-            clips.append(clip)
+            clips.append(
+                clip
+            )
 
             if os.path.exists(
                 input_path
@@ -539,6 +633,7 @@ async def create_mashup(
         mashup = AudioSegment.empty()
 
         for clip in clips:
+
             mashup += clip
 
         output_path = os.path.join(
@@ -553,30 +648,32 @@ async def create_mashup(
         )
 
         return {
+
             "status":
-            "success",
+                "success",
 
             "job_id":
-            job_id,
+                job_id,
 
             "message":
-            "AI Mashup created successfully.",
+                "AI Mashup created successfully.",
 
             "selected_lines":
-            selected_lines,
+                selected_lines,
 
             "download_url":
-            f"/download/{job_id}"
+                f"/download/{job_id}"
         }
 
     except Exception as e:
 
         return {
+
             "status":
-            "error",
+                "error",
 
             "message":
-            str(e)
+                str(e)
         }
 
 
@@ -595,15 +692,21 @@ def download_mashup(
     if not os.path.exists(path):
 
         return {
+
             "status":
-            "error",
+                "error",
 
             "message":
-            "Mashup file not found."
+                "Mashup file not found."
         }
 
     return FileResponse(
+
         path,
-        media_type="audio/mpeg",
-        filename="AI-Mashup.mp3"
+
+        media_type=
+            "audio/mpeg",
+
+        filename=
+            "AI-Mashup.mp3"
     )
