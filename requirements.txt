@@ -7,3 +7,4 @@ groq
 demucs
 torch
 torchaudio
+numpy
