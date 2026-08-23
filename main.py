@@ -168,6 +168,7 @@ def transcribe_audio(
         transcription = client.audio.transcriptions.create(
             file=audio_file,
             model="whisper-large-v3-turbo",
+            language="hi
             response_format="verbose_json",
             timestamp_granularities=["segment"]
         )
