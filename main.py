@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI()
+app = FastAPI(title="AI Mashup Maker")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,7 +16,18 @@ app.add_middleware(
 def home():
     return {
         "status": "online",
-        "service": "AI Mashup Maker"
+        "service": "AI Mashup Maker",
+        "version": "2.0"
+    }
+
+
+@app.post("/analyze")
+async def analyze_song(file: UploadFile = File(...)):
+
+    return {
+        "status": "ready",
+        "message": "Audio analysis endpoint is ready",
+        "filename": file.filename
     }
 
 
@@ -25,12 +36,16 @@ async def create_mashup(
     files: list[UploadFile] = File(...)
 ):
 
+    if len(files) < 2:
+        return {
+            "status": "error",
+            "message": "Upload at least 2 songs."
+        }
+
     return {
-        "status": "success",
-        "message": "Upload endpoint is working",
-        "number_of_files": len(files),
-        "files": [
-            file.filename
-            for file in files
+        "status": "ready",
+        "message": "Mashup request received",
+        "songs": [
+            file.filename for file in files
         ]
     }
