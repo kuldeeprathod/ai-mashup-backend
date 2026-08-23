@@ -8,74 +8,189 @@ import threading
 
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from pydub import AudioSegment
 from groq import Groq
 
 
-app = FastAPI(title="AI Mashup Maker")
+# =========================================================
+# APP
+# =========================================================
+
+app = FastAPI(
+    title="AI Mashup Maker",
+    version="14.0"
+)
+
+
+# =========================================================
+# CORS
+# =========================================================
 
 app.add_middleware(
     CORSMiddleware,
+
     allow_origins=["*"],
+
     allow_credentials=False,
-    allow_methods=["*"],
+
+    allow_methods=[
+        "GET",
+        "POST",
+        "OPTIONS"
+    ],
+
     allow_headers=["*"],
+
+    expose_headers=["*"],
+
+    max_age=3600
 )
 
+
+# =========================================================
+# DIRECTORIES
+# =========================================================
 
 OUTPUT_DIR = "/tmp/mashup_outputs"
 JOB_DIR = "/tmp/mashup_jobs"
 DEMUCS_DIR = "/tmp/demucs"
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(JOB_DIR, exist_ok=True)
-os.makedirs(DEMUCS_DIR, exist_ok=True)
+os.makedirs(
+    OUTPUT_DIR,
+    exist_ok=True
+)
 
+os.makedirs(
+    JOB_DIR,
+    exist_ok=True
+)
+
+os.makedirs(
+    DEMUCS_DIR,
+    exist_ok=True
+)
+
+
+# =========================================================
+# SETTINGS
+# =========================================================
 
 AI_MODEL = "openai/gpt-oss-120b"
-WHISPER_MODEL = "whisper-large-v3-turbo"
+
+WHISPER_MODEL = (
+    "whisper-large-v3-turbo"
+)
 
 CROSSFADE_MS = 1500
+
 TARGET_DBFS = -16.0
 
+MAX_FILE_MB = 25
+
 MAX_CLIP_MS = 15000
+
 MIN_CLIP_MS = 4000
 
 
-# --------------------------------------------------
-# GROQ
-# --------------------------------------------------
+# =========================================================
+# ROOT
+# =========================================================
+
+@app.get("/")
+async def home():
+
+    return {
+
+        "status":
+            "online",
+
+        "service":
+            "AI Mashup Maker",
+
+        "version":
+            "14.0",
+
+        "ai_model":
+            AI_MODEL,
+
+        "whisper_model":
+            WHISPER_MODEL,
+
+        "demucs":
+            True,
+
+        "demucs_device":
+            "cpu",
+
+        "background_processing":
+            True,
+
+        "vocal_instrumental_mix":
+            True,
+
+        "cors":
+            True,
+
+        "crossfade_ms":
+            CROSSFADE_MS
+    }
+
+
+# =========================================================
+# OPTIONS / CORS TEST
+# =========================================================
+
+@app.options("/create-mashup")
+async def create_mashup_options():
+
+    return JSONResponse(
+        content={
+            "status": "ok"
+        }
+    )
+
+
+# =========================================================
+# GROQ CLIENT
+# =========================================================
 
 def get_client():
 
-    key = os.environ.get("GROQ_API_KEY")
+    api_key = os.environ.get(
+        "GROQ_API_KEY"
+    )
 
-    if not key:
+    if not api_key:
+
         raise Exception(
             "GROQ_API_KEY is missing."
         )
 
-    return Groq(api_key=key)
+    return Groq(
+        api_key=api_key
+    )
 
 
-# --------------------------------------------------
-# TEXT
-# --------------------------------------------------
+# =========================================================
+# CLEAN TEXT
+# =========================================================
 
-def clean_text(text):
+def clean_text(
+    text
+):
 
     return re.sub(
         r"\s+",
         " ",
-        text.strip()
+        str(text).strip()
     )
 
 
-# --------------------------------------------------
+# =========================================================
 # WHISPER
-# --------------------------------------------------
+# =========================================================
 
 def transcribe_audio(
     client,
@@ -87,58 +202,88 @@ def transcribe_audio(
         "rb"
     ) as audio_file:
 
-        result = client.audio.transcriptions.create(
-            file=audio_file,
-            model=WHISPER_MODEL,
-            language="hi",
-            response_format="verbose_json",
-            timestamp_granularities=["segment"]
+        result = (
+            client.audio
+            .transcriptions
+            .create(
+
+                file=audio_file,
+
+                model=
+                    WHISPER_MODEL,
+
+                language=
+                    "hi",
+
+                response_format=
+                    "verbose_json",
+
+                timestamp_granularities=[
+                    "segment"
+                ]
+            )
         )
 
     segments = []
 
     for segment in result.segments:
 
-        if isinstance(
-            segment,
-            dict
-        ):
+        try:
 
-            start = segment["start"]
-            end = segment["end"]
-            text = segment.get(
-                "text",
-                ""
+            if isinstance(
+                segment,
+                dict
+            ):
+
+                start = segment[
+                    "start"
+                ]
+
+                end = segment[
+                    "end"
+                ]
+
+                text = segment.get(
+                    "text",
+                    ""
+                )
+
+            else:
+
+                start = segment.start
+
+                end = segment.end
+
+                text = segment.text
+
+            text = clean_text(
+                text
             )
 
-        else:
+            if text:
 
-            start = segment.start
-            end = segment.end
-            text = segment.text
+                segments.append({
 
-        text = clean_text(text)
+                    "start":
+                        float(start),
 
-        if text:
+                    "end":
+                        float(end),
 
-            segments.append({
+                    "text":
+                        text
+                })
 
-                "start":
-                    float(start),
+        except Exception:
 
-                "end":
-                    float(end),
-
-                "text":
-                    text
-            })
+            continue
 
     return segments
 
 
-# --------------------------------------------------
-# LINES
-# --------------------------------------------------
+# =========================================================
+# BUILD NATURAL LINES
+# =========================================================
 
 def build_lines(
     segments
@@ -150,9 +295,17 @@ def build_lines(
 
     for segment in segments:
 
-        start = segment["start"]
-        end = segment["end"]
-        text = segment["text"]
+        start = segment[
+            "start"
+        ]
+
+        end = segment[
+            "end"
+        ]
+
+        text = segment[
+            "text"
+        ]
 
         if current is None:
 
@@ -188,9 +341,11 @@ def build_lines(
             current["end"] = end
 
             current["text"] = (
+
                 current["text"]
                 + " "
                 + text
+
             ).strip()
 
         else:
@@ -212,6 +367,7 @@ def build_lines(
             }
 
     if current:
+
         lines.append(
             current
         )
@@ -219,9 +375,77 @@ def build_lines(
     return lines
 
 
-# --------------------------------------------------
-# AI BEST LINE
-# --------------------------------------------------
+# =========================================================
+# LOCAL SCORE
+# =========================================================
+
+def score_line(
+    line
+):
+
+    duration = (
+        line["end"] -
+        line["start"]
+    )
+
+    words = line[
+        "text"
+    ].split()
+
+    score = 0
+
+    if (
+        5 <= duration <= 15
+    ):
+
+        score += 40
+
+    elif (
+        15 < duration <= 22
+    ):
+
+        score += 25
+
+    elif duration > 22:
+
+        score += 5
+
+    if (
+        6 <= len(words) <= 25
+    ):
+
+        score += 30
+
+    elif len(words) >= 4:
+
+        score += 15
+
+    fillers = [
+
+        "ओह",
+        "आह",
+        "हम्म",
+        "yeah",
+        "yo",
+        "oh",
+        "aah",
+        "hmm",
+        "la",
+        "na"
+    ]
+
+    for word in words:
+
+        if word.lower() in fillers:
+
+            score -= 10
+
+    return score
+
+
+# =========================================================
+# AI SELECT BEST LYRIC
+# =========================================================
 
 def choose_best_line(
     client,
@@ -229,6 +453,7 @@ def choose_best_line(
 ):
 
     if not lines:
+
         return None
 
     candidates = []
@@ -238,30 +463,15 @@ def choose_best_line(
     ):
 
         duration = (
+
             line["end"] -
             line["start"]
+
         )
 
         if duration < 3:
+
             continue
-
-        score = 0
-
-        if 5 <= duration <= 15:
-            score += 40
-
-        elif 15 < duration <= 22:
-            score += 30
-
-        words = line[
-            "text"
-        ].split()
-
-        if 6 <= len(words) <= 25:
-            score += 30
-
-        elif len(words) >= 4:
-            score += 15
 
         candidates.append({
 
@@ -284,18 +494,26 @@ def choose_best_line(
                 line["text"],
 
             "score":
-                score
+                score_line(
+                    line
+                )
         })
 
     if not candidates:
+
         return None
 
-    candidates = sorted(
-        candidates,
+    candidates.sort(
+
         key=lambda x:
             x["score"],
+
         reverse=True
-    )[:30]
+    )
+
+    candidates = candidates[
+        :30
+    ]
 
     candidate_text = ""
 
@@ -309,9 +527,11 @@ def choose_best_line(
         )
 
     prompt = f"""
-You are an expert Hindi music mashup editor.
 
-Choose the ONE strongest lyric section.
+You are a professional Hindi
+music mashup editor.
+
+Select ONE strongest lyric section.
 
 Prefer:
 
@@ -319,7 +539,8 @@ Prefer:
 - emotional
 - memorable
 - complete phrase
-- 5-15 seconds
+- 5 to 15 seconds
+- natural singing section
 - no filler
 - no incomplete lyric
 
@@ -332,43 +553,54 @@ Example:
 Candidates:
 
 {candidate_text}
+
 """
 
-    response = client.chat.completions.create(
+    try:
 
-        model=AI_MODEL,
+        response = (
+            client.chat
+            .completions
+            .create(
 
-        temperature=0,
+                model=
+                    AI_MODEL,
 
-        messages=[
+                temperature=0,
 
-            {
-                "role":
-                    "user",
+                messages=[
 
-                "content":
-                    prompt
-            }
-        ]
-    )
+                    {
 
-    content = (
-        response
-        .choices[0]
-        .message
-        .content
-        .strip()
-    )
+                        "role":
+                            "user",
 
-    match = re.search(
-        r'\{.*?\}',
-        content,
-        re.DOTALL
-    )
+                        "content":
+                            prompt
+                    }
+                ]
+            )
+        )
 
-    if match:
+        content = (
 
-        try:
+            response
+            .choices[0]
+            .message
+            .content
+            .strip()
+        )
+
+        match = re.search(
+
+            r'\{.*?\}',
+
+            content,
+
+            re.DOTALL
+        )
+
+        if match:
 
             result = json.loads(
                 match.group(0)
@@ -387,22 +619,23 @@ Candidates:
 
                     return item
 
-        except Exception:
+    except Exception:
 
-            pass
+        pass
 
     return candidates[0]
 
 
-# --------------------------------------------------
-# VOLUME
-# --------------------------------------------------
+# =========================================================
+# NORMALIZE AUDIO
+# =========================================================
 
-def normalize(
+def normalize_audio(
     audio
 ):
 
     if len(audio) == 0:
+
         return audio
 
     if audio.dBFS == float(
@@ -412,6 +645,7 @@ def normalize(
         return audio
 
     gain = (
+
         TARGET_DBFS -
         audio.dBFS
     )
@@ -429,9 +663,9 @@ def normalize(
     )
 
 
-# --------------------------------------------------
-# DEMUCS
-# --------------------------------------------------
+# =========================================================
+# DEMUCS SEPARATION
+# =========================================================
 
 def separate_audio(
     input_path,
@@ -439,7 +673,9 @@ def separate_audio(
 ):
 
     output_dir = os.path.join(
+
         DEMUCS_DIR,
+
         job_id
     )
 
@@ -488,15 +724,23 @@ def separate_audio(
 
     if process.returncode != 0:
 
+        error = (
+            process.stderr
+            or process.stdout
+            or "Unknown Demucs error."
+        )
+
         raise Exception(
-            "Demucs failed:\n"
-            + process.stderr[-4000:]
+            "Demucs separation failed: "
+            + error[-5000:]
         )
 
     song_name = os.path.splitext(
+
         os.path.basename(
             input_path
         )
+
     )[0]
 
     stem_dir = os.path.join(
@@ -527,7 +771,7 @@ def separate_audio(
     ):
 
         raise Exception(
-            "vocals.wav missing."
+            "Demucs vocals.wav missing."
         )
 
     if not os.path.exists(
@@ -535,15 +779,18 @@ def separate_audio(
     ):
 
         raise Exception(
-            "no_vocals.wav missing."
+            "Demucs no_vocals.wav missing."
         )
 
-    return vocals, instrumental
+    return (
+        vocals,
+        instrumental
+    )
 
 
-# --------------------------------------------------
-# MIX
-# --------------------------------------------------
+# =========================================================
+# CREATE VOCAL + INSTRUMENTAL MIX
+# =========================================================
 
 def create_vocal_mix(
     vocals_path,
@@ -590,9 +837,17 @@ def create_vocal_mix(
         ]
 
     length = min(
+
         len(vocal),
+
         len(music)
     )
+
+    if length <= 0:
+
+        raise Exception(
+            "Empty audio segment."
+        )
 
     vocal = vocal[
         :length
@@ -602,15 +857,15 @@ def create_vocal_mix(
         :length
     ]
 
-    vocal = normalize(
+    vocal = normalize_audio(
         vocal
     )
 
-    music = normalize(
+    music = normalize_audio(
         music
     )
 
-    # Instrumental stays under vocal.
+    # Instrumental नीचे रहेगा
     music = music.apply_gain(
         -9
     )
@@ -620,7 +875,9 @@ def create_vocal_mix(
     )
 
     fade = min(
+
         300,
+
         len(result) // 4
     )
 
@@ -637,11 +894,11 @@ def create_vocal_mix(
     return result
 
 
-# --------------------------------------------------
+# =========================================================
 # CROSSFADE
-# --------------------------------------------------
+# =========================================================
 
-def create_mashup(
+def combine_clips(
     clips
 ):
 
@@ -679,42 +936,77 @@ def create_mashup(
     return result
 
 
-# --------------------------------------------------
-# BACKGROUND WORKER
-# --------------------------------------------------
+# =========================================================
+# SAVE JOB STATUS
+# =========================================================
+
+def save_status(
+    job_id,
+    data
+):
+
+    status_file = os.path.join(
+
+        JOB_DIR,
+
+        f"{job_id}.json"
+    )
+
+    temporary = (
+        status_file
+        + ".tmp"
+    )
+
+    with open(
+        temporary,
+        "w"
+    ) as f:
+
+        json.dump(
+            data,
+            f,
+            ensure_ascii=False
+        )
+
+    os.replace(
+        temporary,
+        status_file
+    )
+
+
+# =========================================================
+# BACKGROUND PROCESS
+# =========================================================
 
 def process_job(
     job_id,
     file_paths
 ):
 
-    status_file = os.path.join(
-        JOB_DIR,
-        f"{job_id}.json"
-    )
-
     try:
 
-        with open(
-            status_file,
-            "w"
-        ) as f:
+        save_status(
 
-            json.dump({
+            job_id,
+
+            {
 
                 "status":
                     "processing",
 
                 "progress":
-                    0
+                    1,
 
-            }, f)
+                "message":
+                    "AI processing शुरू..."
+            }
+        )
 
         client = get_client()
 
         clips = []
 
-        selected = []
+        selected_lines = []
 
         total = len(
             file_paths
@@ -724,9 +1016,37 @@ def process_job(
             file_paths
         ):
 
+            song_number = (
+                index + 1
+            )
+
+            save_status(
+
+                job_id,
+
+                {
+
+                    "status":
+                        "processing",
+
+                    "progress":
+                        int(
+                            (
+                                index
+                                / total
+                            ) * 90
+                        ),
+
+                    "message":
+                        f"Song {song_number} analyze हो रहा है..."
+                }
+            )
+
             # Whisper
             segments = transcribe_audio(
+
                 client,
+
                 input_path
             )
 
@@ -734,21 +1054,73 @@ def process_job(
                 segments
             )
 
-            # AI selection
+            # AI lyric
             best = choose_best_line(
+
                 client,
+
                 lines
+            )
+
+            save_status(
+
+                job_id,
+
+                {
+
+                    "status":
+                        "processing",
+
+                    "progress":
+                        int(
+                            (
+                                index
+                                / total
+                            ) * 90
+                            + 5
+                        ),
+
+                    "message":
+                        f"Song {song_number} का best line चुना जा रहा है..."
+                }
             )
 
             # Demucs
             vocals_path, instrumental_path = (
+
                 separate_audio(
+
                     input_path,
+
                     f"{job_id}_{index}"
                 )
             )
 
-            # Vocal + instrumental
+            save_status(
+
+                job_id,
+
+                {
+
+                    "status":
+                        "processing",
+
+                    "progress":
+                        int(
+                            (
+                                (
+                                    index + 0.7
+                                )
+                                / total
+                            ) * 90
+                        ),
+
+                    "message":
+                        f"Song {song_number} के vocals और instrumental अलग किए जा रहे हैं..."
+                }
+            )
+
+            # Mix
             clip = create_vocal_mix(
 
                 vocals_path,
@@ -764,7 +1136,7 @@ def process_job(
 
             if best:
 
-                selected.append({
+                selected_lines.append({
 
                     "song":
                         os.path.basename(
@@ -784,31 +1156,24 @@ def process_job(
                         best["duration"]
                 })
 
-            progress = int(
-                ((index + 1) / total)
-                * 90
-            )
+        save_status(
 
-            with open(
-                status_file,
-                "w"
-            ) as f:
+            job_id,
 
-                json.dump({
+            {
 
-                    "status":
-                        "processing",
+                "status":
+                    "processing",
 
-                    "progress":
-                        progress,
+                "progress":
+                    95,
 
-                    "message":
-                        f"Processing song {index + 1} of {total}"
+                "message":
+                    "Final mashup तैयार हो रहा है..."
+            }
+        )
 
-                }, f)
-
-        # Final mashup
-        mashup = create_mashup(
+        mashup = combine_clips(
             clips
         )
 
@@ -828,12 +1193,11 @@ def process_job(
             bitrate="192k"
         )
 
-        with open(
-            status_file,
-            "w"
-        ) as f:
+        save_status(
 
-            json.dump({
+            job_id,
+
+            {
 
                 "status":
                     "completed",
@@ -841,29 +1205,31 @@ def process_job(
                 "progress":
                     100,
 
-                "selected_lines":
-                    selected,
+                "message":
+                    "Mashup तैयार है!",
 
-                "download_url":
-                    f"/download/{job_id}",
+                "selected_lines":
+                    selected_lines,
 
                 "duration_seconds":
                     round(
                         len(mashup)
                         / 1000,
                         2
-                    )
+                    ),
 
-            }, f)
+                "download_url":
+                    f"/download/{job_id}"
+            }
+        )
 
     except Exception as e:
 
-        with open(
-            status_file,
-            "w"
-        ) as f:
+        save_status(
 
-            json.dump({
+            job_id,
+
+            {
 
                 "status":
                     "failed",
@@ -873,56 +1239,18 @@ def process_job(
 
                 "message":
                     str(e)
-
-            }, f)
-
-
-# --------------------------------------------------
-# HOME
-# --------------------------------------------------
-
-@app.get("/")
-def home():
-
-    return {
-
-        "status":
-            "online",
-
-        "service":
-            "AI Mashup Maker",
-
-        "version":
-            "13.0",
-
-        "ai_model":
-            AI_MODEL,
-
-        "whisper_model":
-            WHISPER_MODEL,
-
-        "demucs":
-            True,
-
-        "background_processing":
-            True,
-
-        "vocal_instrumental_mix":
-            True,
-
-        "crossfade_ms":
-            CROSSFADE_MS
-    }
+            }
+        )
 
 
-# --------------------------------------------------
-# CREATE JOB
-# --------------------------------------------------
+# =========================================================
+# CREATE MASHUP
+# =========================================================
 
 @app.post(
     "/create-mashup"
 )
-async def create_mashup_endpoint(
+async def create_mashup(
 
     files: list[
         UploadFile
@@ -937,7 +1265,7 @@ async def create_mashup_endpoint(
                 "error",
 
             "message":
-                "Please upload at least 2 songs."
+                "कम से कम 2 songs upload करें।"
         }
 
     job_id = str(
@@ -945,12 +1273,16 @@ async def create_mashup_endpoint(
     )
 
     job_folder = os.path.join(
+
         JOB_DIR,
+
         job_id
     )
 
     os.makedirs(
+
         job_folder,
+
         exist_ok=True
     )
 
@@ -979,9 +1311,18 @@ async def create_mashup_endpoint(
 
             data = await upload.read()
 
-            if len(data) > (
-                25 * 1024 * 1024
-            ):
+            size_mb = (
+                len(data)
+                / 1024
+                / 1024
+            )
+
+            if size_mb > MAX_FILE_MB:
+
+                shutil.rmtree(
+                    job_folder,
+                    ignore_errors=True
+                )
 
                 return {
 
@@ -990,7 +1331,7 @@ async def create_mashup_endpoint(
 
                     "message":
                         f"{upload.filename} "
-                        "is larger than 25 MB."
+                        f"25 MB से बड़ा है।"
                 }
 
             with open(
@@ -1004,29 +1345,24 @@ async def create_mashup_endpoint(
                 path
             )
 
-        status_file = os.path.join(
+        save_status(
 
-            JOB_DIR,
+            job_id,
 
-            f"{job_id}.json"
-        )
-
-        with open(
-            status_file,
-            "w"
-        ) as f:
-
-            json.dump({
+            {
 
                 "status":
                     "queued",
 
                 "progress":
-                    0
+                    0,
 
-            }, f)
+                "message":
+                    "Mashup queue में है..."
+            }
+        )
 
-        thread = threading.Thread(
+        worker = threading.Thread(
 
             target=
                 process_job,
@@ -1039,7 +1375,7 @@ async def create_mashup_endpoint(
             daemon=True
         )
 
-        thread.start()
+        worker.start()
 
         return {
 
@@ -1050,7 +1386,7 @@ async def create_mashup_endpoint(
                 job_id,
 
             "message":
-                "Mashup processing started.",
+                "Mashup processing शुरू हो गई।",
 
             "status_url":
                 f"/status/{job_id}"
@@ -1068,14 +1404,14 @@ async def create_mashup_endpoint(
         }
 
 
-# --------------------------------------------------
+# =========================================================
 # STATUS
-# --------------------------------------------------
+# =========================================================
 
 @app.get(
     "/status/{job_id}"
 )
-def get_status(
+async def job_status(
     job_id: str
 ):
 
@@ -1103,7 +1439,9 @@ def get_status(
             "r"
         ) as f:
 
-            return json.load(f)
+            return json.load(
+                f
+            )
 
     except Exception as e:
 
@@ -1117,14 +1455,14 @@ def get_status(
         }
 
 
-# --------------------------------------------------
+# =========================================================
 # DOWNLOAD
-# --------------------------------------------------
+# =========================================================
 
 @app.get(
     "/download/{job_id}"
 )
-def download_mashup(
+async def download_mashup(
     job_id: str
 ):
 
@@ -1145,7 +1483,7 @@ def download_mashup(
                 "error",
 
             "message":
-                "Mashup is not ready."
+                "Mashup अभी तैयार नहीं है।"
         }
 
     return FileResponse(
