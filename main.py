@@ -31,84 +31,47 @@ def get_client():
 
 
 def clean_text(text):
-    text = text.lower().strip()
+    text = text.strip()
     text = re.sub(r"\s+", " ", text)
     return text
 
 
 def score_line(text, duration):
-    """
-    Best-line scoring.
-
-    Preferred:
-    5-15 seconds
-    meaningful amount of words
-    avoid extremely short/filler segments
-    """
 
     text = clean_text(text)
-
     words = text.split()
-    word_count = len(words)
 
-    if duration < 3:
+    if duration < 3 or len(words) < 3:
         return -1000
-
-    if word_count < 3:
-        return -500
 
     score = 0
 
-    # Preferred duration
     if 5 <= duration <= 15:
         score += 100
-
     elif 15 < duration <= 25:
         score += 70
-
-    elif duration > 25:
+    else:
         score += 20
 
-    else:
-        score += 30
-
-
-    # Word count
-    if 5 <= word_count <= 25:
+    if 5 <= len(words) <= 25:
         score += 40
-
-    elif word_count > 25:
+    elif len(words) > 25:
         score += 15
 
-
-    # Penalize obvious filler
     filler_words = [
-        "yeah",
-        "yo",
-        "oh",
-        "ooh",
-        "aah",
-        "hmm",
-        "la",
-        "na",
-        "hey"
+        "yeah", "yo", "oh", "ooh",
+        "aah", "hmm", "la", "na", "hey"
     ]
 
-    filler_count = sum(
-        1 for word in words
-        if word in filler_words
-    )
+    for word in words:
+        if word.lower() in filler_words:
+            score -= 15
 
-    score -= filler_count * 15
-
-
-    # Prefer useful text
-    if word_count >= 6:
+    if len(words) >= 6:
         score += 20
 
-    if word_count >= 10:
+    if len(words) >= 10:
         score += 10
-
 
     return score
 
@@ -130,27 +93,23 @@ def choose_best_line(segments):
             duration
         )
 
-        if score < 0:
-            continue
+        if score >= 0:
 
-        candidates.append({
-            "start": start,
-            "end": end,
-            "duration": duration,
-            "text": text,
-            "score": score
-        })
-
+            candidates.append({
+                "start": start,
+                "end": end,
+                "duration": duration,
+                "text": text,
+                "score": score
+            })
 
     if not candidates:
         return None
-
 
     candidates.sort(
         key=lambda x: x["score"],
         reverse=True
     )
-
 
     return candidates[0]
 
@@ -166,16 +125,21 @@ def transcribe_audio(
     ) as audio_file:
 
         transcription = client.audio.transcriptions.create(
+
             file=audio_file,
+
             model="whisper-large-v3-turbo",
-            language="hi
+
+            language="hi",
+
             response_format="verbose_json",
-            timestamp_granularities=["segment"]
+
+            timestamp_granularities=[
+                "segment"
+            ]
         )
 
-
     segments = []
-
 
     for segment in transcription.segments:
 
@@ -194,13 +158,18 @@ def transcribe_audio(
             end = segment.end
             text = segment.text
 
-
         segments.append({
-            "start": float(start),
-            "end": float(end),
-            "text": text.strip()
-        })
 
+            "start":
+                float(start),
+
+            "end":
+                float(end),
+
+            "text":
+                clean_text(text)
+
+        })
 
     return segments
 
@@ -209,9 +178,16 @@ def transcribe_audio(
 def home():
 
     return {
-        "status": "online",
-        "service": "AI Mashup Maker",
-        "version": "5.0"
+
+        "status":
+            "online",
+
+        "service":
+            "AI Mashup Maker",
+
+        "version":
+            "6.0 Hindi"
+
     }
 
 
@@ -230,20 +206,21 @@ async def analyze_song(
         f"/tmp/{job_id}{extension}"
     )
 
-
     try:
 
         data = await file.read()
 
-
         if len(data) > 25 * 1024 * 1024:
 
             return {
-                "status": "error",
-                "message":
-                "Audio file is larger than 25 MB."
-            }
 
+                "status":
+                    "error",
+
+                "message":
+                    "Audio file is larger than 25 MB."
+
+            }
 
         with open(
             input_path,
@@ -252,44 +229,44 @@ async def analyze_song(
 
             f.write(data)
 
-
         client = get_client()
-
 
         segments = transcribe_audio(
             client,
             input_path
         )
 
-
         best = choose_best_line(
             segments
         )
 
-
         return {
 
-            "status": "success",
+            "status":
+                "success",
 
             "filename":
-            file.filename,
+                file.filename,
 
             "segments":
-            segments,
+                segments,
 
             "best_line":
-            best
+                best
 
         }
-
 
     except Exception as e:
 
         return {
-            "status": "error",
-            "message": str(e)
-        }
 
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
+        }
 
     finally:
 
@@ -310,11 +287,14 @@ async def create_mashup(
     if len(files) < 2:
 
         return {
-            "status": "error",
-            "message":
-            "Please upload at least 2 songs."
-        }
 
+            "status":
+                "error",
+
+            "message":
+                "Please upload at least 2 songs."
+
+        }
 
     job_id = str(uuid.uuid4())
 
@@ -322,11 +302,9 @@ async def create_mashup(
 
     selected_lines = []
 
-
     try:
 
         client = get_client()
-
 
         for index, upload in enumerate(files):
 
@@ -334,26 +312,26 @@ async def create_mashup(
                 upload.filename or ".mp3"
             )[1]
 
-
             input_path = (
                 f"/tmp/"
                 f"{job_id}_{index}"
                 f"{extension}"
             )
 
-
             data = await upload.read()
-
 
             if len(data) > 25 * 1024 * 1024:
 
                 return {
-                    "status": "error",
-                    "message":
-                    f"{upload.filename} "
-                    "is larger than 25 MB."
-                }
 
+                    "status":
+                        "error",
+
+                    "message":
+                        f"{upload.filename} "
+                        "is larger than 25 MB."
+
+                }
 
             with open(
                 input_path,
@@ -362,30 +340,18 @@ async def create_mashup(
 
                 f.write(data)
 
-
-            # -----------------------------
-            # TRANSCRIPTION
-            # -----------------------------
-
             segments = transcribe_audio(
                 client,
                 input_path
             )
 
-
-            # -----------------------------
-            # BEST LINE
-            # -----------------------------
-
             best = choose_best_line(
                 segments
             )
 
-
             audio = AudioSegment.from_file(
                 input_path
             )
-
 
             if best:
 
@@ -397,89 +363,71 @@ async def create_mashup(
                     best["end"] * 1000
                 )
 
-
-                # Original audio only.
                 clip = audio[
                     start_ms:end_ms
                 ]
 
-
                 selected_lines.append({
 
                     "song":
-                    upload.filename,
+                        upload.filename,
 
                     "text":
-                    best["text"],
+                        best["text"],
 
                     "start":
-                    best["start"],
+                        best["start"],
 
                     "end":
-                    best["end"],
+                        best["end"],
 
                     "duration":
-                    round(
-                        best["duration"],
-                        2
-                    ),
-
-                    "score":
-                    best["score"]
+                        round(
+                            best["duration"],
+                            2
+                        )
 
                 })
 
-
             else:
-
-                # Fallback:
-                # first 10 seconds
-                # if transcription finds nothing.
 
                 clip_length = min(
                     10000,
                     len(audio)
                 )
 
-
                 clip = audio[
                     0:clip_length
                 ]
 
-
                 selected_lines.append({
 
                     "song":
-                    upload.filename,
+                        upload.filename,
 
                     "text":
-                    "",
+                        "",
 
                     "start":
-                    0,
+                        0,
 
                     "end":
-                    round(
-                        clip_length / 1000,
-                        2
-                    ),
+                        round(
+                            clip_length / 1000,
+                            2
+                        ),
 
                     "duration":
-                    round(
-                        clip_length / 1000,
-                        2
-                    ),
-
-                    "score":
-                    0
+                        round(
+                            clip_length / 1000,
+                            2
+                        )
 
                 })
-
 
             clips.append(
                 clip
             )
-
 
             if os.path.exists(
                 input_path
@@ -489,97 +437,97 @@ async def create_mashup(
                     input_path
                 )
 
-
-        # -----------------------------
-        # MERGE
-        # -----------------------------
-
         mashup = AudioSegment.empty()
-
 
         for clip in clips:
 
             mashup += clip
 
-
         output_path = os.path.join(
-            OUTPUT_DIR,
-            f"{job_id}.mp3"
-        )
 
+            OUTPUT_DIR,
+
+            f"{job_id}.mp3"
+
+        )
 
         mashup.export(
-            output_path,
-            format="mp3",
-            bitrate="192k"
-        )
 
+            output_path,
+
+            format="mp3",
+
+            bitrate="192k"
+
+        )
 
         return {
 
             "status":
-            "success",
+                "success",
 
             "job_id":
-            job_id,
+                job_id,
 
             "message":
-            "AI Mashup created successfully.",
+                "AI Mashup created successfully.",
 
             "selected_lines":
-            selected_lines,
+                selected_lines,
 
             "download_url":
-            f"/download/{job_id}"
+                f"/download/{job_id}"
 
         }
-
 
     except Exception as e:
 
         return {
 
             "status":
-            "error",
+                "error",
 
             "message":
-            str(e)
+                str(e)
 
         }
 
 
-@app.get("/download/{job_id}")
+@app.get(
+    "/download/{job_id}"
+)
 def download_mashup(
     job_id: str
 ):
 
     path = os.path.join(
-        OUTPUT_DIR,
-        f"{job_id}.mp3"
-    )
 
+        OUTPUT_DIR,
+
+        f"{job_id}.mp3"
+
+    )
 
     if not os.path.exists(path):
 
         return {
 
             "status":
-            "error",
+                "error",
 
             "message":
-            "Mashup file not found."
+                "Mashup file not found."
 
         }
-
 
     return FileResponse(
 
         path,
 
         media_type=
-        "audio/mpeg",
+            "audio/mpeg",
 
         filename=
-        "AI-Mashup.mp3"
+            "AI-Mashup.mp3"
 
     )
