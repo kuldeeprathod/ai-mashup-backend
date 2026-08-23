@@ -3,4 +3,3 @@ uvicorn
 python-multipart
 pydub
 static-ffmpeg
-openai-whisper
