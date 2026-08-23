@@ -75,7 +75,6 @@ def transcribe_audio(client, file_path):
 def build_natural_lines(segments):
 
     lines = []
-
     current = None
 
     for segment in segments:
@@ -101,7 +100,6 @@ def build_natural_lines(segments):
             current["start"]
         )
 
-        # Join closely connected speech.
         if gap <= 0.8 and current_duration < 25:
 
             current["end"] = end
@@ -139,7 +137,6 @@ def local_score(line):
 
     score = 0
 
-    # Preferred duration.
     if 5 <= duration <= 15:
         score += 40
 
@@ -152,14 +149,12 @@ def local_score(line):
     else:
         score += 5
 
-    # Useful amount of text.
     if 6 <= len(words) <= 25:
         score += 30
 
     elif len(words) >= 4:
         score += 15
 
-    # Avoid obvious filler.
     filler = [
         "ओह",
         "आह",
@@ -173,13 +168,10 @@ def local_score(line):
         "na"
     ]
 
-    filler_count = 0
-
     for word in words:
-        if word.lower() in filler:
-            filler_count += 1
 
-    score -= filler_count * 10
+        if word.lower() in filler:
+            score -= 10
 
     return score
 
@@ -206,7 +198,10 @@ def rank_lines_with_ai(client, lines):
                 "index": index,
                 "start": line["start"],
                 "end": line["end"],
-                "duration": round(duration, 2),
+                "duration": round(
+                    duration,
+                    2
+                ),
                 "text": line["text"],
                 "local_score": score
             })
@@ -214,7 +209,6 @@ def rank_lines_with_ai(client, lines):
     if not candidates:
         return None
 
-    # Limit prompt size.
     candidates = sorted(
         candidates,
         key=lambda x: x["local_score"],
@@ -242,9 +236,10 @@ Priorities:
 3. Sounds natural when isolated.
 4. Prefer approximately 5-15 seconds.
 5. If a complete natural line is longer than 15 seconds,
-   DO NOT reject it only because it is longer.
-6. Avoid filler vocals such as oh, yeah, aah, na, etc.
-7. Do not choose an incomplete phrase if another complete line exists.
+   do not reject it only because it is longer.
+6. Avoid filler vocals such as oh, yeah, aah, na.
+7. Avoid incomplete phrases when a complete line exists.
+8. Prefer lyrics that can transition naturally into another song.
 
 Return ONLY valid JSON:
 
@@ -255,7 +250,7 @@ Candidates:
 """
 
     response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model="llama-3.3-70b-versatile",
         temperature=0,
         messages=[
             {
@@ -265,9 +260,13 @@ Candidates:
         ]
     )
 
-    content = response.choices[0].message.content.strip()
+    content = (
+        response.choices[0]
+        .message
+        .content
+        .strip()
+    )
 
-    # Extract JSON safely.
     match = re.search(
         r'\{.*?\}',
         content,
@@ -327,7 +326,7 @@ def home():
     return {
         "status": "online",
         "service": "AI Mashup Maker",
-        "version": "7.0"
+        "version": "7.1"
     }
 
 
@@ -392,6 +391,7 @@ async def analyze_song(
         if os.path.exists(
             input_path
         ):
+
             os.remove(
                 input_path
             )
@@ -522,6 +522,7 @@ async def create_mashup(
             if os.path.exists(
                 input_path
             ):
+
                 os.remove(
                     input_path
                 )
