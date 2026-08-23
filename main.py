@@ -5,181 +5,711 @@ import re
 import shutil
 import subprocess
 import threading
+import html
 
 from fastapi import FastAPI, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from pydub import AudioSegment
 from groq import Groq
 
 
-# =========================================================
-# APP
-# =========================================================
-
 app = FastAPI(
     title="AI Mashup Maker",
-    version="14.0"
+    version="15.0"
 )
 
-
-# =========================================================
-# CORS
-# =========================================================
-
-app.add_middleware(
-    CORSMiddleware,
-
-    allow_origins=["*"],
-
-    allow_credentials=False,
-
-    allow_methods=[
-        "GET",
-        "POST",
-        "OPTIONS"
-    ],
-
-    allow_headers=["*"],
-
-    expose_headers=["*"],
-
-    max_age=3600
-)
-
-
-# =========================================================
-# DIRECTORIES
-# =========================================================
 
 OUTPUT_DIR = "/tmp/mashup_outputs"
 JOB_DIR = "/tmp/mashup_jobs"
 DEMUCS_DIR = "/tmp/demucs"
 
-os.makedirs(
-    OUTPUT_DIR,
-    exist_ok=True
-)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(JOB_DIR, exist_ok=True)
+os.makedirs(DEMUCS_DIR, exist_ok=True)
 
-os.makedirs(
-    JOB_DIR,
-    exist_ok=True
-)
-
-os.makedirs(
-    DEMUCS_DIR,
-    exist_ok=True
-)
-
-
-# =========================================================
-# SETTINGS
-# =========================================================
 
 AI_MODEL = "openai/gpt-oss-120b"
-
-WHISPER_MODEL = (
-    "whisper-large-v3-turbo"
-)
+WHISPER_MODEL = "whisper-large-v3-turbo"
 
 CROSSFADE_MS = 1500
-
 TARGET_DBFS = -16.0
 
 MAX_FILE_MB = 25
-
 MAX_CLIP_MS = 15000
-
-MIN_CLIP_MS = 4000
 
 
 # =========================================================
-# ROOT
+# HOME
 # =========================================================
 
 @app.get("/")
 async def home():
 
     return {
-
-        "status":
-            "online",
-
-        "service":
-            "AI Mashup Maker",
-
-        "version":
-            "14.0",
-
-        "ai_model":
-            AI_MODEL,
-
-        "whisper_model":
-            WHISPER_MODEL,
-
-        "demucs":
-            True,
-
-        "demucs_device":
-            "cpu",
-
-        "background_processing":
-            True,
-
-        "vocal_instrumental_mix":
-            True,
-
-        "cors":
-            True,
-
-        "crossfade_ms":
-            CROSSFADE_MS
+        "status": "online",
+        "service": "AI Mashup Maker",
+        "version": "15.0",
+        "demucs": True,
+        "background_processing": True
     }
 
 
 # =========================================================
-# OPTIONS / CORS TEST
+# MASHUP WEB APP
 # =========================================================
 
-@app.options("/create-mashup")
-async def create_mashup_options():
+@app.get("/app", response_class=HTMLResponse)
+async def mashup_app():
 
-    return JSONResponse(
-        content={
-            "status": "ok"
+    return """
+<!DOCTYPE html>
+<html lang="hi">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport"
+      content="width=device-width,initial-scale=1">
+
+<title>AI Mashup Maker</title>
+
+<style>
+
+*{
+    box-sizing:border-box;
+}
+
+body{
+    margin:0;
+    padding:20px;
+    font-family:Arial,sans-serif;
+    background:#101014;
+    color:white;
+}
+
+.container{
+    max-width:700px;
+    margin:auto;
+}
+
+.card{
+    background:#1b1b22;
+    border-radius:18px;
+    padding:22px;
+    box-shadow:0 10px 40px rgba(0,0,0,.35);
+}
+
+h1{
+    text-align:center;
+    margin-top:0;
+}
+
+.subtitle{
+    text-align:center;
+    color:#aaa;
+    margin-bottom:25px;
+}
+
+input[type=file]{
+    width:100%;
+    padding:15px;
+    background:#292932;
+    color:white;
+    border-radius:10px;
+    border:1px solid #444;
+}
+
+button{
+    width:100%;
+    margin-top:18px;
+    padding:15px;
+    border:0;
+    border-radius:10px;
+    font-size:17px;
+    font-weight:bold;
+    cursor:pointer;
+    background:#ff3158;
+    color:white;
+}
+
+button:disabled{
+    opacity:.5;
+    cursor:not-allowed;
+}
+
+.progress{
+    margin-top:25px;
+    display:none;
+}
+
+.bar-bg{
+    width:100%;
+    height:14px;
+    background:#333;
+    border-radius:20px;
+    overflow:hidden;
+}
+
+.bar{
+    width:0%;
+    height:100%;
+    background:#ff3158;
+    transition:width .5s;
+}
+
+.status{
+    margin:12px 0;
+    color:#ddd;
+}
+
+.result{
+    display:none;
+    margin-top:25px;
+}
+
+audio{
+    width:100%;
+}
+
+.download{
+    display:block;
+    text-align:center;
+    margin-top:15px;
+    padding:14px;
+    background:#22c55e;
+    color:white;
+    text-decoration:none;
+    border-radius:10px;
+    font-weight:bold;
+}
+
+.error{
+    display:none;
+    margin-top:20px;
+    padding:15px;
+    border-radius:10px;
+    background:#4b1515;
+    color:#ffb4b4;
+    white-space:pre-wrap;
+}
+
+.info{
+    margin-top:20px;
+    padding:14px;
+    background:#25252e;
+    border-radius:10px;
+    color:#bbb;
+    font-size:14px;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<div class="card">
+
+<h1>🎵 AI Mashup Maker</h1>
+
+<div class="subtitle">
+AI Best Lyrics + Vocal Separation + Instrumental Mixing
+</div>
+
+<input
+    id="files"
+    type="file"
+    accept="audio/*"
+    multiple
+>
+
+<button
+    id="start"
+    onclick="startMashup()"
+>
+🎧 Create AI Mashup
+</button>
+
+
+<div
+    id="progress"
+    class="progress"
+>
+
+<div class="status"
+     id="status">
+Songs processing...
+</div>
+
+<div class="bar-bg">
+
+<div
+    class="bar"
+    id="bar">
+</div>
+
+</div>
+
+<div
+    id="percent"
+    style="margin-top:8px;text-align:center;"
+>
+0%
+</div>
+
+</div>
+
+
+<div
+    id="result"
+    class="result"
+>
+
+<h3>✅ Mashup Ready</h3>
+
+<audio
+    id="audio"
+    controls>
+</audio>
+
+<a
+    id="download"
+    class="download"
+    download="AI-Mashup.mp3"
+>
+⬇️ Download Mashup
+</a>
+
+</div>
+
+
+<div
+    id="error"
+    class="error">
+</div>
+
+
+<div class="info">
+
+<b>कैसे काम करता है:</b><br><br>
+
+🎤 AI lyrics detect करता है<br>
+✂️ Best lyric section चुनता है<br>
+🎙️ Demucs vocals अलग करता है<br>
+🎹 Instrumental अलग करता है<br>
+🎚️ Vocal + instrumental mix करता है<br>
+🎵 Smooth crossfade लगाता है
+
+</div>
+
+</div>
+
+</div>
+
+
+<script>
+
+let currentJob = null;
+
+
+function setProgress(
+    value,
+    message
+){
+
+    value = Math.max(
+        0,
+        Math.min(
+            100,
+            value
+        )
+    );
+
+    document.getElementById(
+        "bar"
+    ).style.width =
+        value + "%";
+
+    document.getElementById(
+        "percent"
+    ).innerText =
+        Math.round(value) + "%";
+
+    document.getElementById(
+        "status"
+    ).innerText =
+        message;
+}
+
+
+function showError(
+    message
+){
+
+    const box =
+        document.getElementById(
+            "error"
+        );
+
+    box.style.display =
+        "block";
+
+    box.innerText =
+        message;
+}
+
+
+async function startMashup(){
+
+    const input =
+        document.getElementById(
+            "files"
+        );
+
+    const button =
+        document.getElementById(
+            "start"
+        );
+
+    const files =
+        input.files;
+
+
+    document.getElementById(
+        "error"
+    ).style.display =
+        "none";
+
+    document.getElementById(
+        "result"
+    ).style.display =
+        "none";
+
+
+    if(
+        !files ||
+        files.length < 2
+    ){
+
+        showError(
+            "कम से कम 2 songs upload करें।"
+        );
+
+        return;
+    }
+
+
+    button.disabled =
+        true;
+
+    button.innerText =
+        "⏳ Starting...";
+
+
+    document.getElementById(
+        "progress"
+    ).style.display =
+        "block";
+
+
+    setProgress(
+        2,
+        "Songs upload हो रहे हैं..."
+    );
+
+
+    try{
+
+        const form =
+            new FormData();
+
+
+        for(
+            let i = 0;
+            i < files.length;
+            i++
+        ){
+
+            form.append(
+                "files",
+                files[i]
+            );
+
         }
-    )
+
+
+        const response =
+            await fetch(
+                "/create-mashup",
+                {
+                    method:"POST",
+                    body:form
+                }
+            );
+
+
+        if(
+            !response.ok
+        ){
+
+            const text =
+                await response.text();
+
+            throw new Error(
+                "Server error " +
+                response.status +
+                "\\n" +
+                text
+            );
+
+        }
+
+
+        const data =
+            await response.json();
+
+
+        if(
+            data.status !==
+            "queued"
+        ){
+
+            throw new Error(
+                data.message ||
+                "Mashup start नहीं हुआ।"
+            );
+
+        }
+
+
+        currentJob =
+            data.job_id;
+
+
+        setProgress(
+            5,
+            "AI processing शुरू हो गई..."
+        );
+
+
+        checkJob();
+
+
+    }catch(error){
+
+        console.error(error);
+
+        showError(
+            "Mashup failed:\\n" +
+            error.message
+        );
+
+        button.disabled =
+            false;
+
+        button.innerText =
+            "🎧 Create AI Mashup";
+
+    }
+
+}
+
+
+async function checkJob(){
+
+    try{
+
+        const response =
+            await fetch(
+                "/status/" +
+                encodeURIComponent(
+                    currentJob
+                )
+            );
+
+
+        if(
+            !response.ok
+        ){
+
+            throw new Error(
+                "Status request failed."
+            );
+
+        }
+
+
+        const data =
+            await response.json();
+
+
+        if(
+            data.status ===
+            "queued"
+        ){
+
+            setProgress(
+                5,
+                "Mashup queue में है..."
+            );
+
+        }
+
+
+        else if(
+            data.status ===
+            "processing"
+        ){
+
+            setProgress(
+                data.progress || 10,
+                data.message ||
+                "Songs process हो रहे हैं..."
+            );
+
+        }
+
+
+        else if(
+            data.status ===
+            "completed"
+        ){
+
+            setProgress(
+                100,
+                "🎉 Mashup तैयार है!"
+            );
+
+
+            showResult(
+                data
+            );
+
+            return;
+
+        }
+
+
+        else if(
+            data.status ===
+            "failed"
+        ){
+
+            throw new Error(
+                data.message ||
+                "Processing failed."
+            );
+
+        }
+
+
+        setTimeout(
+            checkJob,
+            5000
+        );
+
+
+    }catch(error){
+
+        showError(
+            "Mashup failed:\\n" +
+            error.message
+        );
+
+        document.getElementById(
+            "start"
+        ).disabled =
+            false;
+
+        document.getElementById(
+            "start"
+        ).innerText =
+            "🎧 Create AI Mashup";
+
+    }
+
+}
+
+
+function showResult(
+    data
+){
+
+    const audio =
+        document.getElementById(
+            "audio"
+        );
+
+    const download =
+        document.getElementById(
+            "download"
+        );
+
+    const url =
+        data.download_url;
+
+    audio.src =
+        url;
+
+    download.href =
+        url;
+
+    document.getElementById(
+        "result"
+    ).style.display =
+        "block";
+
+    document.getElementById(
+        "start"
+    ).disabled =
+        false;
+
+    document.getElementById(
+        "start"
+    ).innerText =
+        "🎧 Create AI Mashup";
+
+}
+
+
+</script>
+
+</body>
+
+</html>
+"""
 
 
 # =========================================================
-# GROQ CLIENT
+# GROQ
 # =========================================================
 
 def get_client():
 
-    api_key = os.environ.get(
+    key = os.environ.get(
         "GROQ_API_KEY"
     )
 
-    if not api_key:
+    if not key:
 
         raise Exception(
             "GROQ_API_KEY is missing."
         )
 
     return Groq(
-        api_key=api_key
+        api_key=key
     )
 
 
 # =========================================================
-# CLEAN TEXT
+# TEXT
 # =========================================================
 
-def clean_text(
-    text
-):
+def clean_text(text):
 
     return re.sub(
         r"\s+",
@@ -212,8 +742,7 @@ def transcribe_audio(
                 model=
                     WHISPER_MODEL,
 
-                language=
-                    "hi",
+                language="hi",
 
                 response_format=
                     "verbose_json",
@@ -235,14 +764,8 @@ def transcribe_audio(
                 dict
             ):
 
-                start = segment[
-                    "start"
-                ]
-
-                end = segment[
-                    "end"
-                ]
-
+                start = segment["start"]
+                end = segment["end"]
                 text = segment.get(
                     "text",
                     ""
@@ -251,14 +774,10 @@ def transcribe_audio(
             else:
 
                 start = segment.start
-
                 end = segment.end
-
                 text = segment.text
 
-            text = clean_text(
-                text
-            )
+            text = clean_text(text)
 
             if text:
 
@@ -282,7 +801,7 @@ def transcribe_audio(
 
 
 # =========================================================
-# BUILD NATURAL LINES
+# LINES
 # =========================================================
 
 def build_lines(
@@ -295,17 +814,9 @@ def build_lines(
 
     for segment in segments:
 
-        start = segment[
-            "start"
-        ]
-
-        end = segment[
-            "end"
-        ]
-
-        text = segment[
-            "text"
-        ]
+        start = segment["start"]
+        end = segment["end"]
+        text = segment["text"]
 
         if current is None:
 
@@ -376,75 +887,7 @@ def build_lines(
 
 
 # =========================================================
-# LOCAL SCORE
-# =========================================================
-
-def score_line(
-    line
-):
-
-    duration = (
-        line["end"] -
-        line["start"]
-    )
-
-    words = line[
-        "text"
-    ].split()
-
-    score = 0
-
-    if (
-        5 <= duration <= 15
-    ):
-
-        score += 40
-
-    elif (
-        15 < duration <= 22
-    ):
-
-        score += 25
-
-    elif duration > 22:
-
-        score += 5
-
-    if (
-        6 <= len(words) <= 25
-    ):
-
-        score += 30
-
-    elif len(words) >= 4:
-
-        score += 15
-
-    fillers = [
-
-        "ओह",
-        "आह",
-        "हम्म",
-        "yeah",
-        "yo",
-        "oh",
-        "aah",
-        "hmm",
-        "la",
-        "na"
-    ]
-
-    for word in words:
-
-        if word.lower() in fillers:
-
-            score -= 10
-
-    return score
-
-
-# =========================================================
-# AI SELECT BEST LYRIC
+# AI SELECTION
 # =========================================================
 
 def choose_best_line(
@@ -463,15 +906,35 @@ def choose_best_line(
     ):
 
         duration = (
-
             line["end"] -
             line["start"]
-
         )
 
         if duration < 3:
 
             continue
+
+        score = 0
+
+        if 5 <= duration <= 15:
+
+            score += 40
+
+        elif 15 < duration <= 22:
+
+            score += 25
+
+        words = line[
+            "text"
+        ].split()
+
+        if 6 <= len(words) <= 25:
+
+            score += 30
+
+        elif len(words) >= 4:
+
+            score += 15
 
         candidates.append({
 
@@ -494,9 +957,7 @@ def choose_best_line(
                 line["text"],
 
             "score":
-                score_line(
-                    line
-                )
+                score
         })
 
     if not candidates:
@@ -527,33 +988,26 @@ def choose_best_line(
         )
 
     prompt = f"""
-
-You are a professional Hindi
-music mashup editor.
+You are a professional Hindi music mashup editor.
 
 Select ONE strongest lyric section.
 
 Prefer:
-
 - catchy
 - emotional
 - memorable
 - complete phrase
 - 5 to 15 seconds
-- natural singing section
 - no filler
 - no incomplete lyric
 
 Return ONLY JSON.
 
 Example:
-
 {{"id": 5}}
 
 Candidates:
-
 {candidate_text}
-
 """
 
     try:
@@ -571,7 +1025,6 @@ Candidates:
                 messages=[
 
                     {
-
                         "role":
                             "user",
 
@@ -583,7 +1036,6 @@ Candidates:
         )
 
         content = (
-
             response
             .choices[0]
             .message
@@ -592,11 +1044,8 @@ Candidates:
         )
 
         match = re.search(
-
             r'\{.*?\}',
-
             content,
-
             re.DOTALL
         )
 
@@ -627,7 +1076,7 @@ Candidates:
 
 
 # =========================================================
-# NORMALIZE AUDIO
+# AUDIO
 # =========================================================
 
 def normalize_audio(
@@ -645,7 +1094,6 @@ def normalize_audio(
         return audio
 
     gain = (
-
         TARGET_DBFS -
         audio.dBFS
     )
@@ -664,7 +1112,7 @@ def normalize_audio(
 
 
 # =========================================================
-# DEMUCS SEPARATION
+# DEMUCS
 # =========================================================
 
 def separate_audio(
@@ -673,9 +1121,7 @@ def separate_audio(
 ):
 
     output_dir = os.path.join(
-
         DEMUCS_DIR,
-
         job_id
     )
 
@@ -689,21 +1135,17 @@ def separate_audio(
         "python",
 
         "-m",
-
         "demucs",
 
         "--two-stems=vocals",
 
         "-d",
-
         "cpu",
 
         "-n",
-
         "htdemucs",
 
         "-o",
-
         output_dir,
 
         input_path
@@ -731,16 +1173,14 @@ def separate_audio(
         )
 
         raise Exception(
-            "Demucs separation failed: "
+            "Demucs separation failed:\n"
             + error[-5000:]
         )
 
     song_name = os.path.splitext(
-
         os.path.basename(
             input_path
         )
-
     )[0]
 
     stem_dir = os.path.join(
@@ -753,16 +1193,12 @@ def separate_audio(
     )
 
     vocals = os.path.join(
-
         stem_dir,
-
         "vocals.wav"
     )
 
     instrumental = os.path.join(
-
         stem_dir,
-
         "no_vocals.wav"
     )
 
@@ -782,14 +1218,11 @@ def separate_audio(
             "Demucs no_vocals.wav missing."
         )
 
-    return (
-        vocals,
-        instrumental
-    )
+    return vocals, instrumental
 
 
 # =========================================================
-# CREATE VOCAL + INSTRUMENTAL MIX
+# MIX
 # =========================================================
 
 def create_vocal_mix(
@@ -837,9 +1270,7 @@ def create_vocal_mix(
         ]
 
     length = min(
-
         len(vocal),
-
         len(music)
     )
 
@@ -865,7 +1296,6 @@ def create_vocal_mix(
         music
     )
 
-    # Instrumental नीचे रहेगा
     music = music.apply_gain(
         -9
     )
@@ -875,9 +1305,7 @@ def create_vocal_mix(
     )
 
     fade = min(
-
         300,
-
         len(result) // 4
     )
 
@@ -937,7 +1365,7 @@ def combine_clips(
 
 
 # =========================================================
-# SAVE JOB STATUS
+# STATUS
 # =========================================================
 
 def save_status(
@@ -945,20 +1373,17 @@ def save_status(
     data
 ):
 
-    status_file = os.path.join(
+    path = os.path.join(
 
         JOB_DIR,
 
         f"{job_id}.json"
     )
 
-    temporary = (
-        status_file
-        + ".tmp"
-    )
+    temp = path + ".tmp"
 
     with open(
-        temporary,
+        temp,
         "w"
     ) as f:
 
@@ -969,13 +1394,13 @@ def save_status(
         )
 
     os.replace(
-        temporary,
-        status_file
+        temp,
+        path
     )
 
 
 # =========================================================
-# BACKGROUND PROCESS
+# BACKGROUND JOB
 # =========================================================
 
 def process_job(
@@ -990,7 +1415,6 @@ def process_job(
             job_id,
 
             {
-
                 "status":
                     "processing",
 
@@ -1006,7 +1430,7 @@ def process_job(
 
         clips = []
 
-        selected_lines = []
+        selected = []
 
         total = len(
             file_paths
@@ -1016,9 +1440,7 @@ def process_job(
             file_paths
         ):
 
-            song_number = (
-                index + 1
-            )
+            number = index + 1
 
             save_status(
 
@@ -1031,22 +1453,18 @@ def process_job(
 
                     "progress":
                         int(
-                            (
-                                index
-                                / total
-                            ) * 90
+                            index
+                            / total
+                            * 90
                         ),
 
                     "message":
-                        f"Song {song_number} analyze हो रहा है..."
+                        f"Song {number} analyze हो रहा है..."
                 }
             )
 
-            # Whisper
             segments = transcribe_audio(
-
                 client,
-
                 input_path
             )
 
@@ -1054,11 +1472,8 @@ def process_job(
                 segments
             )
 
-            # AI lyric
             best = choose_best_line(
-
                 client,
-
                 lines
             )
 
@@ -1075,19 +1490,18 @@ def process_job(
                         int(
                             (
                                 index
-                                / total
-                            ) * 90
-                            + 5
+                                + 0.3
+                            )
+                            / total
+                            * 90
                         ),
 
                     "message":
-                        f"Song {song_number} का best line चुना जा रहा है..."
+                        f"Song {number} की best line चुनी जा रही है..."
                 }
             )
 
-            # Demucs
-            vocals_path, instrumental_path = (
-
+            vocals, instrumental = (
                 separate_audio(
 
                     input_path,
@@ -1108,24 +1522,23 @@ def process_job(
                     "progress":
                         int(
                             (
-                                (
-                                    index + 0.7
-                                )
-                                / total
-                            ) * 90
+                                index
+                                + 0.8
+                            )
+                            / total
+                            * 90
                         ),
 
                     "message":
-                        f"Song {song_number} के vocals और instrumental अलग किए जा रहे हैं..."
+                        f"Song {number} के vocals और instrumental अलग किए जा रहे हैं..."
                 }
             )
 
-            # Mix
             clip = create_vocal_mix(
 
-                vocals_path,
+                vocals,
 
-                instrumental_path,
+                instrumental,
 
                 best
             )
@@ -1136,7 +1549,7 @@ def process_job(
 
             if best:
 
-                selected_lines.append({
+                selected.append({
 
                     "song":
                         os.path.basename(
@@ -1156,6 +1569,7 @@ def process_job(
                         best["duration"]
                 })
 
+
         save_status(
 
             job_id,
@@ -1169,7 +1583,7 @@ def process_job(
                     95,
 
                 "message":
-                    "Final mashup तैयार हो रहा है..."
+                    "Final mashup बनाया जा रहा है..."
             }
         )
 
@@ -1209,7 +1623,7 @@ def process_job(
                     "Mashup तैयार है!",
 
                 "selected_lines":
-                    selected_lines,
+                    selected,
 
                 "duration_seconds":
                     round(
@@ -1272,7 +1686,7 @@ async def create_mashup(
         uuid.uuid4()
     )
 
-    job_folder = os.path.join(
+    folder = os.path.join(
 
         JOB_DIR,
 
@@ -1280,13 +1694,11 @@ async def create_mashup(
     )
 
     os.makedirs(
-
-        job_folder,
-
+        folder,
         exist_ok=True
     )
 
-    file_paths = []
+    paths = []
 
     try:
 
@@ -1303,7 +1715,7 @@ async def create_mashup(
 
             path = os.path.join(
 
-                job_folder,
+                folder,
 
                 f"song_{index}"
                 f"{extension}"
@@ -1311,16 +1723,15 @@ async def create_mashup(
 
             data = await upload.read()
 
-            size_mb = (
+            if (
                 len(data)
-                / 1024
-                / 1024
-            )
-
-            if size_mb > MAX_FILE_MB:
+                > MAX_FILE_MB
+                * 1024
+                * 1024
+            ):
 
                 shutil.rmtree(
-                    job_folder,
+                    folder,
                     ignore_errors=True
                 )
 
@@ -1330,8 +1741,7 @@ async def create_mashup(
                         "error",
 
                     "message":
-                        f"{upload.filename} "
-                        f"25 MB से बड़ा है।"
+                        f"{upload.filename} 25 MB से बड़ा है।"
                 }
 
             with open(
@@ -1341,7 +1751,7 @@ async def create_mashup(
 
                 f.write(data)
 
-            file_paths.append(
+            paths.append(
                 path
             )
 
@@ -1362,20 +1772,20 @@ async def create_mashup(
             }
         )
 
-        worker = threading.Thread(
+        thread = threading.Thread(
 
             target=
                 process_job,
 
             args=(
                 job_id,
-                file_paths
+                paths
             ),
 
             daemon=True
         )
 
-        worker.start()
+        thread.start()
 
         return {
 
@@ -1383,13 +1793,7 @@ async def create_mashup(
                 "queued",
 
             "job_id":
-                job_id,
-
-            "message":
-                "Mashup processing शुरू हो गई।",
-
-            "status_url":
-                f"/status/{job_id}"
+                job_id
         }
 
     except Exception as e:
@@ -1411,11 +1815,11 @@ async def create_mashup(
 @app.get(
     "/status/{job_id}"
 )
-async def job_status(
+async def get_status(
     job_id: str
 ):
 
-    status_file = os.path.join(
+    path = os.path.join(
 
         JOB_DIR,
 
@@ -1423,7 +1827,7 @@ async def job_status(
     )
 
     if not os.path.exists(
-        status_file
+        path
     ):
 
         return {
@@ -1432,27 +1836,14 @@ async def job_status(
                 "not_found"
         }
 
-    try:
+    with open(
+        path,
+        "r"
+    ) as f:
 
-        with open(
-            status_file,
-            "r"
-        ) as f:
-
-            return json.load(
-                f
-            )
-
-    except Exception as e:
-
-        return {
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-        }
+        return json.load(
+            f
+        )
 
 
 # =========================================================
@@ -1462,7 +1853,7 @@ async def job_status(
 @app.get(
     "/download/{job_id}"
 )
-async def download_mashup(
+async def download(
     job_id: str
 ):
 
