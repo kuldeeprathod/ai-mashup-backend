@@ -8,7 +8,7 @@ import uuid
 import json
 import re
 import subprocess
-import math
+import shutil
 
 app = FastAPI(title="AI Mashup Maker")
 
@@ -21,63 +21,40 @@ app.add_middleware(
 )
 
 OUTPUT_DIR = "/tmp/mashup_outputs"
+SEPARATION_DIR = "/tmp/demucs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(SEPARATION_DIR, exist_ok=True)
 
 AI_MODEL = "openai/gpt-oss-120b"
 WHISPER_MODEL = "whisper-large-v3-turbo"
 
 CROSSFADE_MS = 1500
 TARGET_DBFS = -16.0
-
 MAX_CLIP_MS = 15000
 MIN_CLIP_MS = 4000
 
-# Beat matching
-TARGET_BPM = 100
-MIN_BPM = 70
-MAX_BPM = 150
-
-# Maximum tempo adjustment
-MAX_TEMPO_CHANGE = 0.12
+VOCAL_GAIN = 1.0
+INSTRUMENTAL_GAIN = 0.35
 
 
 def get_client():
+    key = os.environ.get("GROQ_API_KEY")
 
-    api_key = os.environ.get(
-        "GROQ_API_KEY"
-    )
+    if not key:
+        raise Exception("GROQ_API_KEY is not configured.")
 
-    if not api_key:
-
-        raise Exception(
-            "GROQ_API_KEY is not configured."
-        )
-
-    return Groq(
-        api_key=api_key
-    )
+    return Groq(api_key=key)
 
 
 def clean_text(text):
-
-    return re.sub(
-        r"\s+",
-        " ",
-        text.strip()
-    )
+    return re.sub(r"\s+", " ", text.strip())
 
 
-def transcribe_audio(
-    client,
-    file_path
-):
+def transcribe_audio(client, file_path):
 
-    with open(
-        file_path,
-        "rb"
-    ) as audio_file:
+    with open(file_path, "rb") as audio_file:
 
-        transcription = client.audio.transcriptions.create(
+        result = client.audio.transcriptions.create(
             file=audio_file,
             model=WHISPER_MODEL,
             language="hi",
@@ -87,25 +64,13 @@ def transcribe_audio(
 
     segments = []
 
-    for segment in transcription.segments:
+    for segment in result.segments:
 
-        if isinstance(
-            segment,
-            dict
-        ):
+        if isinstance(segment, dict):
 
-            start = segment[
-                "start"
-            ]
-
-            end = segment[
-                "end"
-            ]
-
-            text = segment.get(
-                "text",
-                ""
-            )
+            start = segment["start"]
+            end = segment["end"]
+            text = segment.get("text", "")
 
         else:
 
@@ -113,87 +78,52 @@ def transcribe_audio(
             end = segment.end
             text = segment.text
 
-        text = clean_text(
-            text
-        )
+        text = clean_text(text)
 
         if text:
 
             segments.append({
-
-                "start":
-                    float(start),
-
-                "end":
-                    float(end),
-
-                "text":
-                    text
+                "start": float(start),
+                "end": float(end),
+                "text": text
             })
 
     return segments
 
 
-def build_natural_lines(
-    segments
-):
+def build_lines(segments):
 
     lines = []
-
     current = None
 
     for segment in segments:
 
-        start = segment[
-            "start"
-        ]
-
-        end = segment[
-            "end"
-        ]
-
-        text = segment[
-            "text"
-        ]
+        start = segment["start"]
+        end = segment["end"]
+        text = segment["text"]
 
         if current is None:
 
             current = {
-
-                "start":
-                    start,
-
-                "end":
-                    end,
-
-                "text":
-                    text
+                "start": start,
+                "end": end,
+                "text": text
             }
 
             continue
 
-        gap = (
-            start -
-            current["end"]
-        )
+        gap = start - current["end"]
 
         duration = (
             current["end"] -
             current["start"]
         )
 
-        if (
-            gap <= 0.8
-            and duration < 25
-        ):
+        if gap <= 0.8 and duration < 25:
 
-            current[
-                "end"
-            ] = end
+            current["end"] = end
 
-            current[
-                "text"
-            ] = (
+            current["text"] = (
                 current["text"]
                 + " "
                 + text
@@ -201,78 +131,47 @@ def build_natural_lines(
 
         else:
 
-            lines.append(
-                current
-            )
+            lines.append(current)
 
             current = {
-
-                "start":
-                    start,
-
-                "end":
-                    end,
-
-                "text":
-                    text
+                "start": start,
+                "end": end,
+                "text": text
             }
 
     if current:
-
-        lines.append(
-            current
-        )
+        lines.append(current)
 
     return lines
 
 
-def local_score(
-    line
-):
+def score_line(line):
 
     duration = (
         line["end"] -
         line["start"]
     )
 
-    words = line[
-        "text"
-    ].split()
+    words = line["text"].split()
 
     score = 0
 
-    if (
-        5 <= duration <= 15
-    ):
-
+    if 5 <= duration <= 15:
         score += 40
 
-    elif (
-        15 < duration <= 22
-    ):
-
+    elif 15 < duration <= 22:
         score += 30
 
     elif duration > 22:
-
         score += 10
 
-    else:
-
-        score += 5
-
-    if (
-        6 <= len(words) <= 25
-    ):
-
+    if 6 <= len(words) <= 25:
         score += 30
 
     elif len(words) >= 4:
-
         score += 15
 
-    filler = [
-
+    fillers = [
         "ओह",
         "आह",
         "हम्म",
@@ -287,87 +186,50 @@ def local_score(
 
     for word in words:
 
-        if word.lower() in filler:
-
+        if word.lower() in fillers:
             score -= 10
 
     return score
 
 
-def rank_lines_with_ai(
-    client,
-    lines
-):
-
-    if not lines:
-
-        return None
+def choose_best_line(client, lines):
 
     candidates = []
 
-    for index, line in enumerate(
-        lines
-    ):
+    for index, line in enumerate(lines):
 
         duration = (
             line["end"] -
             line["start"]
         )
 
-        score = local_score(
-            line
-        )
+        score = score_line(line)
 
-        if (
-            duration >= 3
-            and score >= 10
-        ):
+        if duration >= 3:
 
             candidates.append({
-
-                "index":
-                    index,
-
-                "start":
-                    line["start"],
-
-                "end":
-                    line["end"],
-
-                "duration":
-                    round(
-                        duration,
-                        2
-                    ),
-
-                "text":
-                    line["text"],
-
-                "local_score":
-                    score
+                "index": index,
+                "start": line["start"],
+                "end": line["end"],
+                "duration": round(duration, 2),
+                "text": line["text"],
+                "score": score
             })
 
     if not candidates:
-
         return None
 
     candidates = sorted(
-
         candidates,
-
-        key=lambda x:
-            x["local_score"],
-
+        key=lambda x: x["score"],
         reverse=True
-
     )[:30]
 
-    candidate_text = ""
+    text = ""
 
     for item in candidates:
 
-        candidate_text += (
-
+        text += (
             f'\nID {item["index"]} | '
             f'{item["duration"]} sec | '
             f'{item["text"]}'
@@ -376,359 +238,274 @@ def rank_lines_with_ai(
     prompt = f"""
 You are an expert Hindi music mashup editor.
 
-Choose ONE candidate lyric line that will sound
-best inside a professional Hindi song mashup.
+Select ONE lyric section that will sound best
+in a professional mashup.
 
-Priorities:
+Choose:
+- catchy
+- emotional
+- memorable
+- complete phrase
+- approximately 5-15 seconds
+- no filler
+- no incomplete phrase
 
-1. Strong memorable lyric.
-2. Emotional or catchy hook.
-3. Complete natural phrase.
-4. Sounds good when isolated.
-5. Prefer 5-15 seconds.
-6. Avoid filler vocals.
-7. Avoid incomplete lyrics.
-8. Prefer a strong standalone section.
-
-Return ONLY valid JSON.
+Return ONLY JSON.
 
 Example:
 {{"id": 12}}
 
 Candidates:
-{candidate_text}
+{text}
 """
 
     response = client.chat.completions.create(
-
         model=AI_MODEL,
-
         temperature=0,
-
         messages=[
-
             {
-
-                "role":
-                    "user",
-
-                "content":
-                    prompt
+                "role": "user",
+                "content": prompt
             }
-
         ]
     )
 
     content = (
-
-        response
-        .choices[0]
+        response.choices[0]
         .message
         .content
         .strip()
     )
 
     match = re.search(
-
         r'\{.*?\}',
-
         content,
-
         re.DOTALL
     )
 
-    if not match:
+    if match:
 
-        return candidates[0]
+        try:
 
-    try:
+            result = json.loads(
+                match.group(0)
+            )
 
-        result = json.loads(
-            match.group(0)
-        )
+            selected = int(
+                result["id"]
+            )
 
-        selected_id = int(
-            result["id"]
-        )
+            for item in candidates:
 
-        for item in candidates:
+                if item["index"] == selected:
+                    return item
 
-            if (
-                item["index"]
-                == selected_id
-            ):
-
-                return item
-
-    except Exception:
-
-        pass
+        except Exception:
+            pass
 
     return candidates[0]
 
 
-def normalize_volume(
-    audio
+def separate_audio(
+    input_path,
+    job_id
 ):
+
+    output_dir = os.path.join(
+        SEPARATION_DIR,
+        job_id
+    )
+
+    os.makedirs(
+        output_dir,
+        exist_ok=True
+    )
+
+    command = [
+        "python",
+        "-m",
+        "demucs",
+        "--two-stems=vocals",
+        "-d",
+        "cpu",
+        "-n",
+        "htdemucs",
+        "-o",
+        output_dir,
+        input_path
+    ]
+
+    process = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=1800
+    )
+
+    if process.returncode != 0:
+
+        raise Exception(
+            "Demucs separation failed: "
+            + process.stderr[-3000:]
+        )
+
+    song_name = os.path.splitext(
+        os.path.basename(input_path)
+    )[0]
+
+    stem_dir = os.path.join(
+        output_dir,
+        "htdemucs",
+        song_name
+    )
+
+    vocals = os.path.join(
+        stem_dir,
+        "vocals.wav"
+    )
+
+    no_vocals = os.path.join(
+        stem_dir,
+        "no_vocals.wav"
+    )
+
+    if not os.path.exists(vocals):
+
+        raise Exception(
+            "Demucs vocals.wav was not created."
+        )
+
+    if not os.path.exists(no_vocals):
+
+        raise Exception(
+            "Demucs no_vocals.wav was not created."
+        )
+
+    return vocals, no_vocals
+
+
+def normalize(audio):
 
     if len(audio) == 0:
-
         return audio
 
-    current_dbfs = audio.dBFS
-
-    if (
-        current_dbfs
-        == float("-inf")
-    ):
-
+    if audio.dBFS == float("-inf"):
         return audio
 
-    change = (
-        TARGET_DBFS -
-        current_dbfs
+    gain = TARGET_DBFS - audio.dBFS
+
+    gain = max(
+        -8,
+        min(8, gain)
     )
 
-    change = max(
-        -8.0,
-        min(
-            8.0,
-            change
-        )
-    )
-
-    return audio.apply_gain(
-        change
-    )
+    return audio.apply_gain(gain)
 
 
-def detect_bpm(
-    file_path
-):
-
-    try:
-
-        command = [
-
-            "ffmpeg",
-
-            "-hide_banner",
-
-            "-i",
-
-            file_path,
-
-            "-af",
-
-            "ebur128=framelog=verbose",
-
-            "-f",
-
-            "null",
-
-            "-"
-        ]
-
-        subprocess.run(
-
-            command,
-
-            stdout=subprocess.PIPE,
-
-            stderr=subprocess.PIPE,
-
-            timeout=60
-        )
-
-    except Exception:
-
-        pass
-
-    # Lightweight fallback.
-    # Full beat detection is handled
-    # using a conservative default.
-
-    return TARGET_BPM
-
-
-def change_tempo(
-    audio,
-    source_bpm,
-    target_bpm
-):
-
-    if (
-        not source_bpm
-        or not target_bpm
-    ):
-
-        return audio
-
-    ratio = (
-        target_bpm /
-        source_bpm
-    )
-
-    change = (
-        ratio - 1.0
-    )
-
-    if abs(change) > MAX_TEMPO_CHANGE:
-
-        if change > 0:
-
-            ratio = (
-                1.0 +
-                MAX_TEMPO_CHANGE
-            )
-
-        else:
-
-            ratio = (
-                1.0 -
-                MAX_TEMPO_CHANGE
-            )
-
-    # Change duration while keeping
-    # the operation conservative.
-    new_length = int(
-        len(audio) / ratio
-    )
-
-    if new_length <= 0:
-
-        return audio
-
-    return audio._spawn(
-        audio.raw_data,
-        overrides={
-            "frame_rate":
-                int(
-                    audio.frame_rate
-                    * ratio
-                )
-        }
-    ).set_frame_rate(
-        audio.frame_rate
-    )
-
-
-def prepare_clip(
-    audio,
+def make_stem_clip(
+    vocals_path,
+    instrumental_path,
     best
 ):
 
+    vocals = AudioSegment.from_file(
+        vocals_path
+    )
+
+    instrumental = AudioSegment.from_file(
+        instrumental_path
+    )
+
     if best:
 
-        start_ms = int(
-            best["start"]
-            * 1000
+        start = int(
+            best["start"] * 1000
         )
 
-        end_ms = int(
-            best["end"]
-            * 1000
+        end = int(
+            best["end"] * 1000
         )
 
-        clip = audio[
-            start_ms:end_ms
+        vocal_clip = vocals[
+            start:end
+        ]
+
+        instrumental_clip = instrumental[
+            start:end
         ]
 
     else:
 
-        clip = audio[
+        vocal_clip = vocals[
             :MAX_CLIP_MS
         ]
 
-    if len(clip) > MAX_CLIP_MS:
-
-        clip = clip[
+        instrumental_clip = instrumental[
             :MAX_CLIP_MS
         ]
 
-    if len(clip) < MIN_CLIP_MS:
+    length = min(
+        len(vocal_clip),
+        len(instrumental_clip)
+    )
 
-        clip = audio[
-            :min(
-                MAX_CLIP_MS,
-                max(
-                    MIN_CLIP_MS,
-                    len(audio)
-                )
-            )
-        ]
+    vocal_clip = vocal_clip[
+        :length
+    ]
 
-    clip = normalize_volume(
-        clip
+    instrumental_clip = instrumental_clip[
+        :length
+    ]
+
+    vocal_clip = normalize(
+        vocal_clip
+    )
+
+    instrumental_clip = normalize(
+        instrumental_clip
+    )
+
+    # Keep instrumental under the vocal.
+    instrumental_clip = (
+        instrumental_clip
+        + (20 * 0.0)
+    )
+
+    instrumental_clip = instrumental_clip.apply_gain(
+        -9
+    )
+
+    vocal_clip = vocal_clip.apply_gain(
+        0
+    )
+
+    # Mix vocal + instrumental
+    mixed = instrumental_clip.overlay(
+        vocal_clip
     )
 
     fade = min(
         300,
-        len(clip) // 4
+        len(mixed) // 4
     )
 
     if fade > 0:
 
-        clip = clip.fade_in(
+        mixed = mixed.fade_in(
             fade
         )
 
-        clip = clip.fade_out(
+        mixed = mixed.fade_out(
             fade
         )
 
-    return clip
+    return mixed
 
 
-def analyze_file(
-    client,
-    file_path
-):
-
-    segments = transcribe_audio(
-
-        client,
-
-        file_path
-    )
-
-    lines = build_natural_lines(
-        segments
-    )
-
-    best = rank_lines_with_ai(
-
-        client,
-
-        lines
-    )
-
-    bpm = detect_bpm(
-        file_path
-    )
-
-    return {
-
-        "segments":
-            segments,
-
-        "lines":
-            lines,
-
-        "best_line":
-            best,
-
-        "bpm":
-            bpm
-    }
-
-
-def create_smooth_mashup(
-    clips
-):
+def create_mashup(clips):
 
     if not clips:
-
         return AudioSegment.empty()
 
     result = clips[0]
@@ -736,11 +513,8 @@ def create_smooth_mashup(
     for clip in clips[1:]:
 
         crossfade = min(
-
             CROSSFADE_MS,
-
             len(result) // 3,
-
             len(clip) // 3
         )
 
@@ -751,11 +525,8 @@ def create_smooth_mashup(
         else:
 
             result = result.append(
-
                 clip,
-
-                crossfade=
-                    crossfade
+                crossfade=crossfade
             )
 
     return result
@@ -765,129 +536,16 @@ def create_smooth_mashup(
 def home():
 
     return {
-
-        "status":
-            "online",
-
-        "service":
-            "AI Mashup Maker",
-
-        "version":
-            "11.0",
-
-        "ai_model":
-            AI_MODEL,
-
-        "whisper_model":
-            WHISPER_MODEL,
-
-        "crossfade_ms":
-            CROSSFADE_MS,
-
-        "volume_normalization":
-            True,
-
-        "beat_matching":
-            True,
-
-        "target_bpm":
-            TARGET_BPM
+        "status": "online",
+        "service": "AI Mashup Maker",
+        "version": "12.0",
+        "ai_model": AI_MODEL,
+        "whisper_model": WHISPER_MODEL,
+        "demucs": True,
+        "device": "cpu",
+        "vocal_instrumental_mix": True,
+        "crossfade_ms": CROSSFADE_MS
     }
-
-
-@app.post("/analyze")
-async def analyze_song(
-    file: UploadFile = File(...)
-):
-
-    job_id = str(
-        uuid.uuid4()
-    )
-
-    extension = os.path.splitext(
-        file.filename or ".mp3"
-    )[1]
-
-    input_path = (
-        f"/tmp/"
-        f"{job_id}"
-        f"{extension}"
-    )
-
-    try:
-
-        data = await file.read()
-
-        if len(data) > (
-            25 * 1024 * 1024
-        ):
-
-            return {
-
-                "status":
-                    "error",
-
-                "message":
-                    "Audio file is larger than 25 MB."
-            }
-
-        with open(
-            input_path,
-            "wb"
-        ) as f:
-
-            f.write(data)
-
-        client = get_client()
-
-        result = analyze_file(
-
-            client,
-
-            input_path
-        )
-
-        return {
-
-            "status":
-                "success",
-
-            "filename":
-                file.filename,
-
-            "segments":
-                result["segments"],
-
-            "lines":
-                result["lines"],
-
-            "best_line":
-                result["best_line"],
-
-            "bpm":
-                result["bpm"]
-        }
-
-    except Exception as e:
-
-        return {
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-        }
-
-    finally:
-
-        if os.path.exists(
-            input_path
-        ):
-
-            os.remove(
-                input_path
-            )
 
 
 @app.post("/create-mashup")
@@ -898,41 +556,26 @@ async def create_mashup(
     if len(files) < 2:
 
         return {
-
-            "status":
-                "error",
-
-            "message":
-                "Please upload at least 2 songs."
+            "status": "error",
+            "message": "Please upload at least 2 songs."
         }
 
-    job_id = str(
-        uuid.uuid4()
-    )
+    job_id = str(uuid.uuid4())
 
     clips = []
-
-    selected_lines = []
-
-    bpm_data = []
+    selected = []
 
     try:
 
         client = get_client()
 
-        for index, upload in enumerate(
-            files
-        ):
+        for index, upload in enumerate(files):
 
             extension = os.path.splitext(
-
-                upload.filename
-                or ".mp3"
-
+                upload.filename or ".mp3"
             )[1]
 
             input_path = (
-
                 f"/tmp/"
                 f"{job_id}_"
                 f"{index}"
@@ -941,18 +584,12 @@ async def create_mashup(
 
             data = await upload.read()
 
-            if len(data) > (
-                25 * 1024 * 1024
-            ):
+            if len(data) > 25 * 1024 * 1024:
 
                 return {
-
-                    "status":
-                        "error",
-
+                    "status": "error",
                     "message":
-                        f"{upload.filename} "
-                        "is larger than 25 MB."
+                        f"{upload.filename} is larger than 25 MB."
                 }
 
             with open(
@@ -962,51 +599,45 @@ async def create_mashup(
 
                 f.write(data)
 
-            result = analyze_file(
-
+            # 1. Transcription
+            segments = transcribe_audio(
                 client,
-
                 input_path
             )
 
-            best = result[
-                "best_line"
-            ]
-
-            source_bpm = result[
-                "bpm"
-            ]
-
-            audio = AudioSegment.from_file(
-
-                input_path
+            # 2. Natural lyric lines
+            lines = build_lines(
+                segments
             )
 
-            clip = prepare_clip(
+            # 3. AI selection
+            best = choose_best_line(
+                client,
+                lines
+            )
 
-                audio,
+            # 4. Demucs separation
+            vocals_path, instrumental_path = (
+                separate_audio(
+                    input_path,
+                    f"{job_id}_{index}"
+                )
+            )
 
+            # 5. Vocal + instrumental mix
+            clip = make_stem_clip(
+                vocals_path,
+                instrumental_path,
                 best
             )
 
-            # Conservative tempo matching
-            clip = change_tempo(
-
-                clip,
-
-                source_bpm,
-
-                TARGET_BPM
-            )
-
-            clip = normalize_volume(
+            clips.append(
                 clip
             )
 
             if best:
 
-                selected_lines.append({
-
+                selected.append({
                     "song":
                         upload.filename,
 
@@ -1025,47 +656,18 @@ async def create_mashup(
 
             else:
 
-                selected_lines.append({
-
+                selected.append({
                     "song":
                         upload.filename,
 
                     "text":
                         "",
-
-                    "start":
-                        0,
-
-                    "end":
-                        round(
-                            len(clip)
-                            / 1000,
-                            2
-                        ),
-
                     "duration":
                         round(
-                            len(clip)
-                            / 1000,
+                            len(clip) / 1000,
                             2
                         )
                 })
-
-            bpm_data.append({
-
-                "song":
-                    upload.filename,
-
-                "original_bpm":
-                    source_bpm,
-
-                "target_bpm":
-                    TARGET_BPM
-            })
-
-            clips.append(
-                clip
-            )
 
             if os.path.exists(
                 input_path
@@ -1075,26 +677,36 @@ async def create_mashup(
                     input_path
                 )
 
-        mashup = create_smooth_mashup(
-
+        # 6. Final mashup
+        mashup = create_mashup(
             clips
         )
 
         output_path = os.path.join(
-
             OUTPUT_DIR,
-
             f"{job_id}.mp3"
         )
 
         mashup.export(
-
             output_path,
-
             format="mp3",
-
             bitrate="192k"
         )
+
+        # Cleanup Demucs files
+        demucs_job_dir = os.path.join(
+            SEPARATION_DIR,
+            job_id
+        )
+
+        if os.path.exists(
+            demucs_job_dir
+        ):
+
+            shutil.rmtree(
+                demucs_job_dir,
+                ignore_errors=True
+            )
 
         return {
 
@@ -1105,35 +717,25 @@ async def create_mashup(
                 job_id,
 
             "message":
-                "AI Beat-Matched Mashup created successfully.",
+                "AI Vocal + Instrumental Mashup created successfully.",
 
             "selected_lines":
-                selected_lines,
-
-            "bpm_data":
-                bpm_data,
+                selected,
 
             "audio_info": {
+
+                "demucs":
+                    True,
+
+                "vocal_instrumental_mix":
+                    True,
 
                 "crossfade_ms":
                     CROSSFADE_MS,
 
-                "volume_normalization":
-                    True,
-
-                "beat_matching":
-                    True,
-
-                "target_bpm":
-                    TARGET_BPM,
-
-                "clip_count":
-                    len(clips),
-
                 "duration_seconds":
                     round(
-                        len(mashup)
-                        / 1000,
+                        len(mashup) / 1000,
                         2
                     )
             },
@@ -1145,7 +747,6 @@ async def create_mashup(
     except Exception as e:
 
         return {
-
             "status":
                 "error",
 
@@ -1162,18 +763,13 @@ def download_mashup(
 ):
 
     path = os.path.join(
-
         OUTPUT_DIR,
-
         f"{job_id}.mp3"
     )
 
-    if not os.path.exists(
-        path
-    ):
+    if not os.path.exists(path):
 
         return {
-
             "status":
                 "error",
 
@@ -1182,12 +778,7 @@ def download_mashup(
         }
 
     return FileResponse(
-
         path,
-
-        media_type=
-            "audio/mpeg",
-
-        filename=
-            "AI-Mashup.mp3"
+        media_type="audio/mpeg",
+        filename="AI-Mashup.mp3"
     )
