@@ -1,4 +1,3 @@
-```python
 import os
 import uuid
 import json
@@ -1317,4 +1316,3 @@ async def download(job_id: str):
         media_type="audio/mpeg",
         filename="AI-Mashup.mp3"
     )
-```
